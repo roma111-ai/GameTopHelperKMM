@@ -1,11 +1,17 @@
 rootProject.name = "GameTopHelperKMM"
 
+
+
 pluginManagement {
     repositories {
         google()
         mavenCentral()
         gradlePluginPortal()
     }
+}
+
+plugins {
+    id("org.gradle.toolchains.foojay-resolver-convention") version("0.7.0")
 }
 
 dependencyResolutionManagement {
@@ -18,5 +24,5 @@ dependencyResolutionManagement {
 
 include(":androidApp")
 include(":shared")
-include("iosApp")
-include(":app") // старый модуль
+//include("iosApp")
+ // старый модуль

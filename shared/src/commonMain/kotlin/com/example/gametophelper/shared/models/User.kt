@@ -1,21 +1,16 @@
-package com.example.gametophelper.models
+package com.example.gametophelper.shared.models
 
-import java.util.*
+import kotlinx.serialization.Serializable
 
+@Serializable
 data class User(
-    val id: String = UUID.randomUUID().toString(),
+    val id: String,
     val login: String,
     val password: String,
+    val token: String = "",
+    val role: UserRole,
     val groupId: String,
-    val fullName: String? = null,  // ← Nullable
-    val course: Int? = null,       // ← Nullable
-    val lastLoginTime: Long = System.currentTimeMillis(),
-    val isActive: Boolean = true
-)
-
-data class AuthState(
-    val isAuthenticated: Boolean = false,
-    val currentUser: User? = null,
-    val error: String? = null,
-    val isLoading: Boolean = false
+    val fullName: String? = null,
+    val course: Int? = null,
+    val lastLoginTime: Long = 0
 )

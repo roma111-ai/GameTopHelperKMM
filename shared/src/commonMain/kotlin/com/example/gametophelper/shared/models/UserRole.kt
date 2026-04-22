@@ -1,4 +1,7 @@
 package com.example.gametophelper.shared.models
 
-class UserRole {
+enum class UserRole {
+    STUDENT,
+    TEACHER,
+    ADMIN
 }

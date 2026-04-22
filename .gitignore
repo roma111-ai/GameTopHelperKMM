@@ -1,0 +1,25 @@
+﻿# Build files
+build/
+.cxx/
+*.dex
+*.class
+*.apk
+*.aar
+
+# Android
+.gradle/
+local.properties
+*.iml
+
+# IDE
+.idea/
+*.swp
+*.lock
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Shared build
+shared/build/
+shared/.cxx/
