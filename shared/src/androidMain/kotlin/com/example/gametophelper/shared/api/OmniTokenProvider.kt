@@ -15,6 +15,7 @@ class OmniTokenProvider(private val context: Context) {
 
     private var loginStarted = false
     private var scheduleRequested = false
+    private var collegeSwitched = false
     private var webViewRef: WebView? = null
 
     private fun safeDestroy() {
@@ -26,7 +27,7 @@ class OmniTokenProvider(private val context: Context) {
     }
 
     suspend fun getScheduleFromWebView(login: String, password: String): String? =
-        withTimeoutOrNull(60_000L) { // Увеличили таймаут до 60 секунд
+        withTimeoutOrNull(60_000L) {
             suspendCancellableCoroutine { continuation ->
 
                 Handler(Looper.getMainLooper()).post {
@@ -68,11 +69,11 @@ class OmniTokenProvider(private val context: Context) {
 
                             webViewClient = object : WebViewClient() {
                                 override fun onPageFinished(view: WebView?, url: String?) {
-                                    println("📄 URL=$url | loginStarted=$loginStarted | scheduleRequested=$scheduleRequested")
+                                    println("📄 URL=$url | login=$loginStarted | schedule=$scheduleRequested | college=$collegeSwitched")
 
                                     // ФИНИШ: Расписание
                                     if (url?.contains("schedulePage") == true && !url.contains("login")) {
-                                        println("🔍 РАСПИСАНИЕ НАЙДЕНО! Ждём 6 сек...")
+                                        println("🔍 РАСПИСАНИЕ! Ждём 6 сек...")
                                         Handler(Looper.getMainLooper()).postDelayed({
                                             println("⏰ Извлекаем HTML...")
                                             webViewRef?.evaluateJavascript("""
@@ -83,61 +84,54 @@ class OmniTokenProvider(private val context: Context) {
                                         return
                                     }
 
-                                    // ШАГ 2: Новости → кликаем на Расписание в меню
+                                    // ШАГ 2b: Новости после смены города → сразу к расписанию
+                                    if (url?.contains("news") == true && collegeSwitched) {
+                                        println("📰 Город сменён! Загружаем расписание через loadUrl...")
+                                        Handler(Looper.getMainLooper()).postDelayed({
+                                            webViewRef?.loadUrl("https://omni.top-academy.ru/#/schedulePage")
+                                        }, 1500)
+                                        return
+                                    }
+
+                                    // ШАГ 2a: Новости (первый раз) → переключаем на КОЛЛЕДЖ
                                     if (url?.contains("news") == true && !scheduleRequested) {
                                         scheduleRequested = true
-                                        println("📰 НОВОСТИ! Ищем ссылку на расписание...")
+                                        collegeSwitched = true
+                                        println("📰 НОВОСТИ! Переключаем на КОЛЛЕДЖ...")
                                         Handler(Looper.getMainLooper()).postDelayed({
-                                            println("🔍 Выполняем JS для поиска ссылки...")
                                             webViewRef?.evaluateJavascript("""
                                                 (function() {
-                                                    OmniBridge.onLog('=== ПОИСК РАСПИСАНИЯ ===');
+                                                    OmniBridge.onLog('=== ПЕРЕКЛЮЧАЕМ НА КОЛЛЕДЖ ===');
                                                     
-                                                    var allLinks = document.querySelectorAll('a');
-                                                    OmniBridge.onLog('Всего ссылок: ' + allLinks.length);
-                                                    
-                                                    var scheduleLinks = document.querySelectorAll('a[href*="schedulePage"]');
-                                                    OmniBridge.onLog('Ссылок на schedulePage: ' + scheduleLinks.length);
-                                                    
-                                                    for (var i = 0; i < scheduleLinks.length; i++) {
-                                                        OmniBridge.onLog('  [' + i + '] href=' + scheduleLinks[i].href + ' text=' + (scheduleLinks[i].textContent||'').trim());
+                                                    var cityButtons = document.querySelectorAll('button.changeUser, md-menu button, [ng-click*="changeCity"], [ng-click*="city"]');
+                                                    OmniBridge.onLog('Кнопок: ' + cityButtons.length);
+                                                    for (var i = 0; i < cityButtons.length; i++) {
+                                                        OmniBridge.onLog('  [' + i + '] ' + (cityButtons[i].textContent||'').trim());
                                                     }
                                                     
-                                                    var liItems = document.querySelectorAll('li.schedulePage a, li[class*="schedule"] a');
-                                                    OmniBridge.onLog('li.schedulePage a: ' + liItems.length);
-                                                    
-                                                    var targetLink = scheduleLinks[0] || liItems[0];
-                                                    if (targetLink) {
-                                                        OmniBridge.onLog('КЛИКАЕМ: ' + targetLink.href);
-                                                        
-                                                        // Способ 1: обычный клик
-                                                        targetLink.click();
-                                                        OmniBridge.onLog('Способ 1: click()');
-                                                        
-                                                        // Способ 2: MouseEvent
-                                                        var event = new MouseEvent('click', {
-                                                            view: window,
-                                                            bubbles: true,
-                                                            cancelable: true
+                                                    // Способ 1: Angular
+                                                    try {
+                                                        var scope = angular.element(document.body).scope();
+                                                        scope['${'$'}apply'](function() {
+                                                            scope.changeCity(402);
                                                         });
-                                                        targetLink.dispatchEvent(event);
-                                                        OmniBridge.onLog('Способ 2: MouseEvent');
-                                                        
-                                                        // Способ 3: focus + Enter
-                                                        targetLink.focus();
-                                                        var ke = new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true });
-                                                        targetLink.dispatchEvent(ke);
-                                                        OmniBridge.onLog('Способ 3: Enter');
-                                                        
-                                                        // Способ 4: запасной переход
-                                                        setTimeout(function() {
-                                                            OmniBridge.onLog('Способ 4: location.href');
-                                                            window.location.href = 'https://omni.top-academy.ru/#/schedulePage';
-                                                        }, 1000);
-                                                    } else {
-                                                        OmniBridge.onLog('Ссылка не найдена! Пробуем хеш...');
-                                                        window.location.hash = '#/schedulePage';
+                                                        OmniBridge.onLog('changeCity(402) вызван');
+                                                    } catch(e) {
+                                                        OmniBridge.onLog('Angular: ' + e.message);
                                                     }
+                                                    
+                                                    // Способ 2: клик по "Колледж"
+                                                    setTimeout(function() {
+                                                        var btns = document.querySelectorAll('button, a, md-menu-item');
+                                                        for (var j = 0; j < btns.length; j++) {
+                                                            var txt = (btns[j].textContent||'').trim();
+                                                            if (txt.indexOf('Колледж') > -1 && txt.indexOf('ВУЗ') === -1) {
+                                                                OmniBridge.onLog('Кликаем: ' + txt);
+                                                                btns[j].click();
+                                                                break;
+                                                            }
+                                                        }
+                                                    }, 500);
                                                 })();
                                             """.trimIndent(), null)
                                         }, 2000)
@@ -147,10 +141,10 @@ class OmniTokenProvider(private val context: Context) {
                                     // ШАГ 1: Логин
                                     if (url?.contains("login") == true && !loginStarted) {
                                         loginStarted = true
-                                        println("🔐 ЛОГИН! Ждём 4 сек для рендеринга...")
+                                        println("🔐 ЛОГИН! Ждём 4 сек...")
 
                                         Handler(Looper.getMainLooper()).postDelayed({
-                                            println("🔑 Заполняем поля и кликаем Войти...")
+                                            println("🔑 Заполняем поля...")
                                             webViewRef?.evaluateJavascript("""
                                                 (function() {
                                                     OmniBridge.onLog('=== СТАРТ ЛОГИНА ===');
@@ -164,29 +158,21 @@ class OmniTokenProvider(private val context: Context) {
                                                     };
                                                     
                                                     var inputs = document.querySelectorAll('input');
-                                                    OmniBridge.onLog('Полей ввода: ' + inputs.length);
                                                     for (var i = 0; i < inputs.length; i++) {
                                                         OmniBridge.onLog('  [' + i + '] type=' + inputs[i].type + ' ng-model=' + (inputs[i].getAttribute('ng-model')||'нет'));
                                                     }
                                                     
                                                     try {
                                                         var scope = angular.element(document.body).scope();
-                                                        OmniBridge.onLog('Angular scope найден');
                                                         scope['${'$'}apply'](function() {
                                                             if (scope.form) {
                                                                 scope.form.username = '$login';
                                                                 scope.form.password = '$password';
-                                                                OmniBridge.onLog('scope.form.username = ' + scope.form.username);
-                                                            } else {
-                                                                OmniBridge.onLog('scope.form не найден');
                                                             }
                                                         });
-                                                    } catch(e) {
-                                                        OmniBridge.onLog('Angular error: ' + e.message);
-                                                    }
+                                                    } catch(e) {}
                                                     
                                                     setTimeout(function() {
-                                                        OmniBridge.onLog('--- nativeSetter ---');
                                                         var inp2 = document.querySelectorAll('input');
                                                         var lf = null, pf = null;
                                                         for (var k = 0; k < inp2.length; k++) {
@@ -200,16 +186,13 @@ class OmniTokenProvider(private val context: Context) {
                                                             lf.dispatchEvent(new Event('input', {bubbles: true}));
                                                             setter.call(pf, '$password');
                                                             pf.dispatchEvent(new Event('input', {bubbles: true}));
-                                                            OmniBridge.onLog('Поля заполнены через setter');
                                                         }
                                                         
                                                         var btns = document.querySelectorAll('button');
-                                                        OmniBridge.onLog('Кнопок: ' + btns.length);
                                                         for (var j = 0; j < btns.length; j++) {
-                                                            OmniBridge.onLog('  [' + j + '] ' + (btns[j].textContent||'').trim());
                                                             if ((btns[j].textContent||'').trim() === 'Войти') {
                                                                 btns[j].click();
-                                                                OmniBridge.onLog('КЛИК по Войти!');
+                                                                OmniBridge.onLog('КЛИК!');
                                                                 break;
                                                             }
                                                         }

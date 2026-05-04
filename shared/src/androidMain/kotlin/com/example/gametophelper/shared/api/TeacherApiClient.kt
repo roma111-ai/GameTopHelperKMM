@@ -8,22 +8,21 @@ import kotlinx.coroutines.withContext
 
 class TeacherApiClient(private val context: Context? = null) {
 
+    private var cachedHtml: String? = null
+
     private fun getSessionManager(): SessionManager? {
         return context?.let { SessionManager(it) }
     }
 
     suspend fun login(login: String, password: String): Boolean = withContext(Dispatchers.IO) {
-        // Просто проверяем, можем ли получить расписание
         val provider = OmniTokenProvider(context!!)
         val html = provider.getScheduleFromWebView(login, password)
+        cachedHtml = html
         val success = html != null
         if (success) {
-            // Сохраняем логин/пароль для будущих запросов
             getSessionManager()?.saveUser(
-                login = login,
-                password = password,
-                token = "teacher_webview",
-                userType = null
+                login = login, password = password,
+                token = "teacher_webview", userType = null
             )
             println("✅ Успешный вход через WebView")
         }
@@ -34,27 +33,24 @@ class TeacherApiClient(private val context: Context? = null) {
         try {
             val login = getSessionManager()?.getCurrentUser()?.login
             val password = getSessionManager()?.getCurrentUser()?.password
+            if (login == null || password == null) return@withContext emptyList()
 
-            if (login == null || password == null) {
-                println("❌ Нет сохранённых данных для входа")
-                return@withContext emptyList()
+            val html = if (cachedHtml != null) {
+                println("♻ Кеш HTML (${cachedHtml!!.length} символов)")
+                cachedHtml.also { cachedHtml = null }
+            } else {
+                println("========== ЗАГРУЗКА ЧЕРЕЗ WEBVIEW ==========")
+                OmniTokenProvider(context!!).getScheduleFromWebView(login, password)
             }
-
-            println("========== ЗАГРУЗКА РАСПИСАНИЯ ПРЕПОДАВАТЕЛЯ ЧЕРЕЗ WEBVIEW ==========")
-
-            val provider = OmniTokenProvider(context!!)
-            val html = provider.getScheduleFromWebView(login, password)
 
             if (html != null) {
-                println("📦 HTML получен (${html.length} символов)")
+                println("📦 HTML (${html.length} символов)")
                 parseScheduleFromHtml(html)
             } else {
-                println("❌ Не удалось получить HTML из WebView")
+                println("❌ Не удалось получить HTML")
                 emptyList()
             }
-
         } catch (e: Exception) {
-            println("❌ Ошибка: ${e.message}")
             e.printStackTrace()
             emptyList()
         }
@@ -64,94 +60,65 @@ class TeacherApiClient(private val context: Context? = null) {
         val lessons = mutableListOf<Lesson>()
 
         try {
-            // Ищем таблицу с расписанием
             val tableStart = html.indexOf("<table class=\"bordered schedule_table\"")
-            if (tableStart == -1) {
-                println("❌ Таблица schedule_table не найдена в HTML")
-                // Пробуем найти любую таблицу с классом bordered
-                val anyTable = html.indexOf("<table class=\"bordered")
-                if (anyTable == -1) {
-                    println("❌ Вообще нет таблиц bordered в HTML")
-                    return emptyList()
-                }
-            }
+            if (tableStart == -1) return emptyList()
 
-            // Ищем tbody
             val tbodyStart = html.indexOf("<tbody>", tableStart)
             val tbodyEnd = html.indexOf("</tbody>", tbodyStart)
-            if (tbodyStart == -1 || tbodyEnd == -1) {
-                println("❌ tbody не найден")
-                return emptyList()
-            }
+            if (tbodyStart == -1 || tbodyEnd == -1) return emptyList()
 
             val tbody = html.substring(tbodyStart, tbodyEnd + 8)
-
-            // Парсим строки таблицы
             val rowRegex = "<tr[^>]*>(.*?)</tr>".toRegex(RegexOption.DOT_MATCHES_ALL)
-            val cellRegex = "<td[^>]*>(.*?)</td>".toRegex(RegexOption.DOT_MATCHES_ALL)
-            val pRegex = "<p[^>]*class=\"([^\"]*)\"[^>]*>(.*?)</p>".toRegex(RegexOption.DOT_MATCHES_ALL)
-            val spanRegex = "<span[^>]*class=\"([^\"]*)\"[^>]*>(.*?)</span>".toRegex(RegexOption.DOT_MATCHES_ALL)
-
             val rows = rowRegex.findAll(tbody).toList()
-            println("📊 Найдено строк в tbody: ${rows.size}")
+            println("📊 Строк: ${rows.size}")
 
             for (row in rows) {
                 val rowHtml = row.groupValues[1]
+                val cellRegex = "<td[^>]*>(.*?)</td>".toRegex(RegexOption.DOT_MATCHES_ALL)
                 val cells = cellRegex.findAll(rowHtml).toList()
-
                 if (cells.isEmpty()) continue
 
-                // Первая ячейка — номер пары
-                val firstCell = cells[0].groupValues[1]
-                val pairNumber = spanRegex.find(firstCell)?.groupValues?.getOrNull(2)?.trim() ?: ""
-
-                // Остальные ячейки — дни недели
                 for (i in 1 until cells.size) {
                     val cellHtml = cells[i].groupValues[1]
+                    val pRegex = "<p[^>]*class=\"([^\"]*)\"[^>]*>(.*?)</p>".toRegex(RegexOption.DOT_MATCHES_ALL)
+                    val pMatches = pRegex.findAll(cellHtml).toList()
 
-                    // Ищем p с классом subject
-                    val subjectMatch = pRegex.findAll(cellHtml).find { it.groupValues[1] == "subject ng-binding" }
-                    val subject = subjectMatch?.groupValues?.getOrNull(2)?.trim() ?: ""
+                    var subject = ""
+                    var group = ""
+                    var room = ""
+                    var timeStartEnd = ""
 
-                    // Ищем p с классом group
-                    val groupMatch = pRegex.findAll(cellHtml).find { it.groupValues[1] == "group ng-binding" }
-                    val group = groupMatch?.groupValues?.getOrNull(2)?.trim() ?: ""
-
-                    // Ищем p с классом auditory
-                    val auditoryMatch = pRegex.findAll(cellHtml).find { it.groupValues[1] == "auditory ng-binding" }
-                    val room = auditoryMatch?.groupValues?.getOrNull(2)?.trim() ?: ""
-
-                    // Ищем p с классом time_start_end
-                    val timeMatch = pRegex.findAll(cellHtml).find { it.groupValues[1] == "time_start_end ng-binding" }
-                    val timeStartEnd = timeMatch?.groupValues?.getOrNull(2)?.trim() ?: ""
+                    for (p in pMatches) {
+                        val className = p.groupValues[1]
+                        val content = p.groupValues[2].trim()
+                            .replace("&nbsp;", " ")
+                        when {
+                            className.contains("subject") -> subject = content
+                            className.contains("group") -> group = content
+                            className.contains("auditory") -> room = content
+                            className.contains("time_start_end") -> timeStartEnd = content
+                        }
+                    }
 
                     if (subject.isNotEmpty()) {
                         val timeParts = timeStartEnd.split("-").map { it.trim() }
-                        val timeStart = timeParts.getOrElse(0) { "" }
-                        val timeEnd = timeParts.getOrElse(1) { "" }
-
-                        lessons.add(
-                            Lesson(
-                                subject = subject,
-                                timeStart = timeStart,
-                                timeEnd = timeEnd,
-                                teacher = group,
-                                room = room
-                            )
-                        )
+                        lessons.add(Lesson(
+                            subject = subject,
+                            timeStart = timeParts.getOrElse(0) { "" },
+                            timeEnd = timeParts.getOrElse(1) { "" },
+                            teacher = group,
+                            room = room
+                        ))
                     }
                 }
             }
 
-            // Удаляем дубликаты
             val unique = lessons.distinctBy { "${it.subject}_${it.timeStart}_${it.room}" }
-            println("✅ Всего спарсено уроков: ${unique.size}")
-
+            println("✅ Спарсено: ${unique.size}")
             return unique
 
         } catch (e: Exception) {
-            println("❌ Ошибка парсинга HTML: ${e.message}")
-            e.printStackTrace()
+            println("❌ Ошибка: ${e.message}")
             return emptyList()
         }
     }

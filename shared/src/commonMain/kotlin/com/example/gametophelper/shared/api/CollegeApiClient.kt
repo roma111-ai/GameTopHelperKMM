@@ -33,7 +33,7 @@ class CollegeApiClient(private val context: Context? = null) {
 
     fun getUserType(): UserType = currentUserType
 
-    // ========== АВТОРИЗАЦИЯ (для первого входа) ==========
+    // ========== АВТОРИЗАЦИЯ ==========
 
     suspend fun login(login: String, password: String): LoginResult = withContext(Dispatchers.IO) {
         // 1. Пробуем студенческий API
@@ -97,6 +97,7 @@ class CollegeApiClient(private val context: Context? = null) {
         if (teacherSuccess) {
             println("✅ Преподаватель авторизован!")
             currentUserType = UserType.TEACHER
+            context?.let { SessionManager(it).saveUserType(UserType.TEACHER) }
             return@withContext LoginResult(
                 success = true,
                 token = "teacher_session",
@@ -108,11 +109,11 @@ class CollegeApiClient(private val context: Context? = null) {
         return@withContext LoginResult(success = false)
     }
 
-    // ========== ВСПОМОГАТЕЛЬНЫЙ ЛОГИН СТУДЕНТА (без смены типа) ==========
+    // ========== ВСПОМОГАТЕЛЬНЫЙ ЛОГИН СТУДЕНТА ==========
 
     private suspend fun loginAsStudent(login: String, password: String): LoginResult = withContext(Dispatchers.IO) {
         try {
-            println("========== ЛОГИН КАК СТУДЕНТ (без смены типа) ==========")
+            println("========== ЛОГИН КАК СТУДЕНТ ==========")
             println("🔑 Логин: $login")
 
             val url = URL("$BASE_URL$LOGIN_ENDPOINT")
@@ -149,7 +150,7 @@ class CollegeApiClient(private val context: Context? = null) {
             connection.disconnect()
 
             if (responseCode in 200..299) {
-                println("✅ Студент авторизован (без смены типа)!")
+                println("✅ Студент авторизован!")
                 val json = JSONObject(response)
                 val accessToken = json.optString("access_token", "")
                 val expiresInMs = json.optLong("expires_in", 0L)
@@ -169,7 +170,7 @@ class CollegeApiClient(private val context: Context? = null) {
         }
     }
 
-    // ========== ПОЛУЧЕНИЕ РАСПИСАНИЯ НА НЕДЕЛЮ (для приложения) ==========
+    // ========== ПОЛУЧЕНИЕ РАСПИСАНИЯ НА НЕДЕЛЮ ==========
 
     suspend fun getWeekSchedule(): Map<String, List<Lesson>> = withContext(Dispatchers.IO) {
         val sessionManager = context?.let { SessionManager(it) }
@@ -186,7 +187,6 @@ class CollegeApiClient(private val context: Context? = null) {
 
         when (savedUserType) {
             UserType.STUDENT -> {
-                // ОДИН логин для всей недели
                 val loginResult = loginAsStudent(login, password)
                 if (!loginResult.success || loginResult.token == null) {
                     println("❌ Не удалось авторизоваться как студент")
@@ -202,30 +202,24 @@ class CollegeApiClient(private val context: Context? = null) {
 
                 for (day in 0..6) {
                     val dateStr = dateFormat.format(calendar.time)
-                    println("📅 Запрос расписания на $dateStr")
+                    println("📅 Запрос на $dateStr")
                     val lessons = getStudentSchedule(token, dateStr)
                     weekSchedule[dateStr] = lessons
                     calendar.add(Calendar.DAY_OF_YEAR, 1)
-                    if (day < 6) delay(300) // пауза между запросами
+                    if (day < 6) delay(300)
                 }
 
-                println("✅ Загружено дней: ${weekSchedule.size}")
+                println("✅ Студент: ${weekSchedule.size} дней")
                 weekSchedule
             }
             UserType.TEACHER -> {
-                // ОДИН логин + парсинг HTML
-                val teacherSuccess = teacherApi.login(login, password)
-                if (!teacherSuccess) {
-                    println("❌ Не удалось авторизоваться как преподаватель")
-                    return@withContext emptyMap()
-                }
                 val lessons = teacherApi.getSchedule(0)
                 val today = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
-                println("✅ Преподаватель: получено ${lessons.size} уроков")
+                println("✅ Преподаватель: ${lessons.size} уроков")
                 mapOf(today to lessons)
             }
             else -> {
-                println("❌ Неизвестный тип пользователя: $savedUserType")
+                println("❌ Неизвестный тип: $savedUserType")
                 emptyMap()
             }
         }
@@ -249,17 +243,10 @@ class CollegeApiClient(private val context: Context? = null) {
                 val loginResult = loginAsStudent(login, password)
                 if (loginResult.success && loginResult.token != null) {
                     getStudentSchedule(loginResult.token, date)
-                } else {
-                    emptyList()
-                }
+                } else emptyList()
             }
             UserType.TEACHER -> {
-                val teacherSuccess = teacherApi.login(login, password)
-                if (teacherSuccess) {
-                    teacherApi.getSchedule(0)
-                } else {
-                    emptyList()
-                }
+                teacherApi.getSchedule(0)
             }
             else -> emptyList()
         }
@@ -269,8 +256,8 @@ class CollegeApiClient(private val context: Context? = null) {
 
     private suspend fun getStudentSchedule(token: String?, date: String): List<Lesson> = withContext(Dispatchers.IO) {
         try {
-            println("========== ЗАПРОС РАСПИСАНИЯ СТУДЕНТА ==========")
-            println("📅 Дата: $date")
+            println("========== ЗАПРОС СТУДЕНТА ==========")
+            println("📅 $date")
 
             val url = URL("$BASE_URL$SCHEDULE_ENDPOINT?date_filter=$date")
             val connection = url.openConnection() as HttpURLConnection
