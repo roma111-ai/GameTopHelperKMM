@@ -4,6 +4,7 @@ import android.appwidget.AppWidgetManager
 import android.appwidget.AppWidgetProvider
 import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
 import android.widget.RemoteViews
 import androidx.work.*
 import com.example.gametophelper.R
@@ -17,149 +18,70 @@ import java.util.concurrent.TimeUnit
 
 class ScheduleWidgetProvider : AppWidgetProvider() {
 
-    override fun onUpdate(
-        context: Context,
-        appWidgetManager: AppWidgetManager,
-        appWidgetIds: IntArray
-    ) {
+    override fun onUpdate(context: Context, appWidgetManager: AppWidgetManager, appWidgetIds: IntArray) {
         scheduleWidgetUpdate(context)
-        appWidgetIds.forEach { appWidgetId ->
-            updateWidget(context, appWidgetManager, appWidgetId)
-        }
+        appWidgetIds.forEach { updateWidget(context, appWidgetManager, it) }
     }
 
-    override fun onEnabled(context: Context) {
-        super.onEnabled(context)
-        scheduleWidgetUpdate(context)
-    }
-
-    override fun onDisabled(context: Context) {
-        super.onDisabled(context)
-        cancelWidgetUpdate(context)
-    }
+    override fun onEnabled(context: Context) { scheduleWidgetUpdate(context) }
+    override fun onDisabled(context: Context) { cancelWidgetUpdate(context) }
 
     companion object {
         fun updateWidget(context: Context) {
             val appWidgetManager = AppWidgetManager.getInstance(context)
-            val appWidgetIds = appWidgetManager.getAppWidgetIds(
-                ComponentName(context, ScheduleWidgetProvider::class.java)
-            )
-            appWidgetIds.forEach { appWidgetId ->
-                updateWidget(context, appWidgetManager, appWidgetId)
-            }
+            val ids = appWidgetManager.getAppWidgetIds(ComponentName(context, ScheduleWidgetProvider::class.java))
+            ids.forEach { updateWidget(context, appWidgetManager, it) }
         }
 
-        private fun updateWidget(
-            context: Context,
-            appWidgetManager: AppWidgetManager,
-            appWidgetId: Int
-        ) {
+        private fun updateWidget(context: Context, appWidgetManager: AppWidgetManager, appWidgetId: Int) {
             CoroutineScope(Dispatchers.IO).launch {
                 try {
-                    println("🔍 [Виджет] Начинаем обновление")
-
                     val sessionManager = SessionManager(context)
+                    if (!sessionManager.hasValidSession()) return@launch
+                    val user = sessionManager.getCurrentUser() ?: return@launch
 
-                    if (sessionManager.hasValidSession()) {
-                        val token = sessionManager.getToken()
+                    val apiClient = CollegeApiClient(context)
+                    val dateStr = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
+                    val lessons = apiClient.getScheduleByDate(null, dateStr)
 
-                        if (token != null) {
-                            val apiClient = CollegeApiClient(context)
-
-                            val calendar = Calendar.getInstance()
-                            val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
-                            val dateStr = dateFormat.format(calendar.time)
-
-                            println("📅 Запрос расписания на $dateStr")
-
-                            val lessons = apiClient.getScheduleByDate(token, dateStr)
-
-                            println("📚 Получено ${lessons.size} пар")
-
-                            withContext(Dispatchers.Main) {
-                                updateWidgetUI(context, appWidgetManager, appWidgetId, lessons)
-                            }
-                        } else {
-                            withContext(Dispatchers.Main) {
-                                updateWidgetUI(context, appWidgetManager, appWidgetId, emptyList())
-                            }
-                        }
-                    } else {
-                        withContext(Dispatchers.Main) {
-                            updateWidgetUI(context, appWidgetManager, appWidgetId, emptyList())
-                        }
-                    }
-                } catch (e: Exception) {
-                    println("❌ Ошибка виджета: ${e.message}")
-                    withContext(Dispatchers.Main) {
-                        updateWidgetUI(context, appWidgetManager, appWidgetId, emptyList())
-                    }
-                }
+                    withContext(Dispatchers.Main) { updateWidgetUI(context, appWidgetManager, appWidgetId, lessons) }
+                } catch (e: Exception) { e.printStackTrace() }
             }
         }
 
-        private fun updateWidgetUI(
-            context: Context,
-            appWidgetManager: AppWidgetManager,
-            appWidgetId: Int,
-            lessons: List<Lesson>
-        ) {
+        private fun updateWidgetUI(context: Context, appWidgetManager: AppWidgetManager, appWidgetId: Int, lessons: List<Lesson>) {
             val views = RemoteViews(context.packageName, R.layout.widget_schedule)
+            views.setTextViewText(R.id.widget_schedule_text, if (lessons.isEmpty()) "🎓 Нет пар" else buildScheduleText(lessons))
+            views.setTextViewText(R.id.widget_update_time, "🕐 ${SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())}")
+            views.setTextViewText(R.id.widget_countdown, getCountdownToNextLesson(lessons))
 
-            val scheduleText = if (lessons.isEmpty()) {
-                "🎓 Нет пар\n\nВойдите в приложение, чтобы видеть расписание"
-            } else {
-                buildScheduleText(lessons)
-            }
-            views.setTextViewText(R.id.widget_schedule_text, scheduleText)
-
-            val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
-            views.setTextViewText(R.id.widget_update_time, "🕐 ${timeFormat.format(Date())}")
-
+            val intent = Intent(context, com.example.gametophelper.MainActivity::class.java).apply { flags = Intent.FLAG_ACTIVITY_NEW_TASK }
+            views.setOnClickPendingIntent(R.id.widget_schedule_text, android.app.PendingIntent.getActivity(context, appWidgetId, intent, android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE))
             appWidgetManager.updateAppWidget(appWidgetId, views)
-            println("✅ Виджет $appWidgetId обновлён")
+        }
+
+        private fun getCountdownToNextLesson(lessons: List<Lesson>): String {
+            if (lessons.isEmpty()) return "✨ Отдыхай!"
+            val now = Calendar.getInstance()
+            val cur = now.get(Calendar.HOUR_OF_DAY) * 60 + now.get(Calendar.MINUTE)
+            for (l in lessons) {
+                val parts = l.timeStart.split(":")
+                if (parts.size >= 2) { val m = parts[0].toInt() * 60 + parts[1].toInt(); if (m > cur) { val d = m - cur; return if (d / 60 > 0) "⏳ ${d/60}ч ${d%60}м" else "⏳ ${d}м" } }
+            }
+            return "✨ Завтра"
         }
 
         private fun buildScheduleText(lessons: List<Lesson>): String {
             val sb = StringBuilder()
-            lessons.take(5).forEachIndexed { index, lesson ->
-                sb.append("${index + 1}. ${lesson.timeStart} - ${lesson.subject}\n")
-                if (lesson.teacher.isNotEmpty()) {
-                    sb.append("   👨‍🏫 ${lesson.teacher}\n")
-                }
-                if (lesson.room.isNotEmpty()) {
-                    sb.append("   🏫 ${lesson.room}")
-                }
-                if (index < lessons.size - 1 && index < 4) {
-                    sb.append("\n\n")
-                }
-            }
-            if (lessons.size > 5) {
-                sb.append("\n\n... и ещё ${lessons.size - 5} пар")
-            }
+            lessons.forEachIndexed { i, l -> sb.append("${i+1}. ${l.timeStart} - ${l.subject}\n   👨🏫 ${l.teacher}\n   🏫 ${l.room}\n${if (i < lessons.size-1) "\n" else ""}") }
             return sb.toString()
         }
 
         private fun scheduleWidgetUpdate(context: Context) {
-            val constraints = Constraints.Builder()
-                .setRequiredNetworkType(NetworkType.CONNECTED)
-                .build()
-
-            val updateRequest = PeriodicWorkRequestBuilder<WidgetUpdateWorker>(
-                30, TimeUnit.MINUTES
-            )
-                .setConstraints(constraints)
-                .build()
-
-            WorkManager.getInstance(context).enqueueUniquePeriodicWork(
-                "widget_update",
-                ExistingPeriodicWorkPolicy.KEEP,
-                updateRequest
-            )
+            WorkManager.getInstance(context).enqueueUniquePeriodicWork("widget_update", ExistingPeriodicWorkPolicy.KEEP,
+                PeriodicWorkRequestBuilder<WidgetUpdateWorker>(30, TimeUnit.MINUTES).setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()).build())
         }
 
-        private fun cancelWidgetUpdate(context: Context) {
-            WorkManager.getInstance(context).cancelUniqueWork("widget_update")
-        }
+        private fun cancelWidgetUpdate(context: Context) { WorkManager.getInstance(context).cancelUniqueWork("widget_update") }
     }
 }

@@ -43,6 +43,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             GameTopHelperKMMTheme {
                 MainScreen(
+                    sessionManager = sessionManager,  // ← передаём сюда
                     onSaveProgress = { money, exp, powerLevel, helperIndex ->
                         lifecycleScope.launch {
                             sessionManager.saveMoney(money)
@@ -70,16 +71,14 @@ class MainActivity : ComponentActivity() {
         println("🐱 Помощник: $savedHelper")
         println("========================================")
 
-        // Загружаем всё сразу в C++
         GameBridge.loadGameData(savedMoney, savedExp, savedPowerLevel, savedHelper)
-
-        // Инициализируем игру
         GameBridge.initGame(false)
     }
 }
 
 @Composable
 fun MainScreen(
+    sessionManager: SessionManager,  // ← добавили параметр
     onSaveProgress: (money: Int, exp: Int, powerLevel: Int, helperIndex: Int) -> Unit
 ) {
     var money by remember { mutableStateOf(GameBridge.getMoney()) }
@@ -130,6 +129,12 @@ fun MainScreen(
                     icon = { Text("🎮", fontSize = 20.sp) },
                     label = { Text("Игры", fontSize = 12.sp) }
                 )
+                NavigationBarItem(
+                    selected = selectedTab == 3,
+                    onClick = { selectedTab = 3 },
+                    icon = { Text("📅", fontSize = 20.sp) },
+                    label = { Text("Расписание", fontSize = 10.sp) }
+                )
             }
         }
     ) { paddingValues ->
@@ -162,6 +167,7 @@ fun MainScreen(
                 )
                 1 -> ShopScreen()
                 2 -> GamesScreen()
+                3 -> ScheduleFullScreen(sessionManager = sessionManager)  // ← теперь работает
             }
         }
     }

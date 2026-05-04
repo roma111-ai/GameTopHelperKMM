@@ -18,8 +18,8 @@ import com.example.gametophelper.ChooseHelperActivity
 import com.example.gametophelper.MainActivity
 import com.example.gametophelper.shared.api.CollegeApiClient
 import com.example.gametophelper.shared.auth.SessionManager
-import com.example.gametophelper.shared.models.UserData
 import com.example.gametophelper.ui.theme.GameTopHelperKMMTheme
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 class LoginActivity : ComponentActivity() {
@@ -34,23 +34,16 @@ class LoginActivity : ComponentActivity() {
         apiClient = CollegeApiClient(this)
 
         lifecycleScope.launch {
-            // Проверяем, есть ли сохранённая сессия
             val hasSession = sessionManager.hasValidSession()
+            val savedHelper = sessionManager.getCurrentHelperIndex()
 
-            if (hasSession) {
-                // Проверяем, выбран ли персонаж
-                val savedHelper = sessionManager.getCurrentHelperIndex()
-
-                if (savedHelper == -1) {
-                    // Есть сессия, но персонаж не выбран
-                    startActivity(Intent(this@LoginActivity, ChooseHelperActivity::class.java))
-                } else {
-                    // Есть сессия и персонаж выбран
-                    startActivity(Intent(this@LoginActivity, MainActivity::class.java))
-                }
+            if (hasSession && savedHelper != -1) {
+                startActivity(Intent(this@LoginActivity, MainActivity::class.java))
+                finish()
+            } else if (hasSession && savedHelper == -1) {
+                startActivity(Intent(this@LoginActivity, ChooseHelperActivity::class.java))
                 finish()
             } else {
-                // Нет сессии - показываем экран входа
                 setContent {
                     GameTopHelperKMMTheme {
                         LoginScreen(
@@ -67,41 +60,75 @@ class LoginActivity : ComponentActivity() {
     private fun performLogin(login: String, password: String) {
         lifecycleScope.launch {
             if (login.isNotBlank() && password.isNotBlank()) {
-                try {
-                    Toast.makeText(this@LoginActivity, "Авторизация...", Toast.LENGTH_SHORT).show()
+                setContent {
+                    GameTopHelperKMMTheme {
+                        LoadingScreen(message = "Авторизация...")
+                    }
+                }
 
+                delay(500)
+
+                try {
                     val result = apiClient.login(login, password)
 
-                    // Проверяем, что токен не null
-                    if (result.success && result.token != null) {
-                        val realToken = result.token  // теперь это String, а не String?
+                    if (result.success) {
+                        val userType = apiClient.getUserType()
+                        sessionManager.saveUser(
+                            login = login,
+                            password = password,
+                            token = result.token,
+                            userType = userType,
+                            userData = result.userData,
+                            expiresIn = result.expiresIn?.let { it / 1000 }
+                        )
+                        sessionManager.saveUserType(userType)
 
-                        // Конвертируем UserData
-                        val userData = result.userData?.let {
-                            UserData(
-                                groupId = it.groupId,
-                                fullName = it.fullName,
-                                course = it.course
-                            )
-                        }
-
-                        // Сохраняем с реальным токеном (non-null)
-                        sessionManager.saveUser(login, password, realToken, userData)
-
-                        Toast.makeText(this@LoginActivity, "Добро пожаловать!", Toast.LENGTH_LONG).show()
+                        Toast.makeText(
+                            this@LoginActivity,
+                            "Добро пожаловать!",
+                            Toast.LENGTH_SHORT
+                        ).show()
 
                         startActivity(Intent(this@LoginActivity, ChooseHelperActivity::class.java))
                         finish()
                     } else {
-                        Toast.makeText(this@LoginActivity, "Неверный логин или пароль", Toast.LENGTH_LONG).show()
+                        setContent {
+                            GameTopHelperKMMTheme {
+                                LoginScreen(
+                                    onLoginClick = { l, p ->
+                                        performLogin(l, p)
+                                    }
+                                )
+                            }
+                        }
+                        Toast.makeText(
+                            this@LoginActivity,
+                            "Неверный логин или пароль",
+                            Toast.LENGTH_LONG
+                        ).show()
                     }
-
                 } catch (e: Exception) {
-                    Toast.makeText(this@LoginActivity, "Ошибка: ${e.message}", Toast.LENGTH_LONG).show()
-                    e.printStackTrace()
+                    setContent {
+                        GameTopHelperKMMTheme {
+                            LoginScreen(
+                                onLoginClick = { l, p ->
+                                    performLogin(l, p)
+                                }
+                            )
+                        }
+                    }
+                    Toast.makeText(
+                        this@LoginActivity,
+                        "Ошибка: ${e.message}",
+                        Toast.LENGTH_LONG
+                    ).show()
                 }
             } else {
-                Toast.makeText(this@LoginActivity, "Введите логин и пароль", Toast.LENGTH_SHORT).show()
+                Toast.makeText(
+                    this@LoginActivity,
+                    "Введите логин и пароль",
+                    Toast.LENGTH_SHORT
+                ).show()
             }
         }
     }
@@ -152,5 +179,26 @@ fun LoginScreen(onLoginClick: (String, String) -> Unit) {
         ) {
             Text("Войти")
         }
+    }
+}
+
+@Composable
+fun LoadingScreen(message: String = "Загрузка...") {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        CircularProgressIndicator(
+            color = MaterialTheme.colorScheme.primary
+        )
+        Spacer(modifier = Modifier.height(16.dp))
+        Text(
+            text = message,
+            fontSize = 16.sp,
+            color = MaterialTheme.colorScheme.onBackground
+        )
     }
 }
